@@ -1,0 +1,4 @@
+{
+    "python.defaultInterpreterPath": "G:\\Masters\\Sem 3\\Capstone\\On-Device-WiFi-CSI-Occupancy-Counting-on-an-ESP32-S3-for-Energy-Saving-Smart-Rooms\\SmartRoomSense\\.venv\\Scripts\\python.exe",
+    "cmake.sourceDirectory": "G:/Masters/Sem 3/Capstone/On-Device-WiFi-CSI-Occupancy-Counting-on-an-ESP32-S3-for-Energy-Saving-Smart-Rooms/SmartRoomSense/firmware/csi_recv_router"
+}

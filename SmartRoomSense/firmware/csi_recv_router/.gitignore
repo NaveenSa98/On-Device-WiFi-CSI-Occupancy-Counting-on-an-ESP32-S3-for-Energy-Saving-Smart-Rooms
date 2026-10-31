@@ -1,0 +1,5 @@
+main/wifi_creds.h
+
+# Contains the Wi-Fi password
+sdkconfig
+sdkconfig.old
