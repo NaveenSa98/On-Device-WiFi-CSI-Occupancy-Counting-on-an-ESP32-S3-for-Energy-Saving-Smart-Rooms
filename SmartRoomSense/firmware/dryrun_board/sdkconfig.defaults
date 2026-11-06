@@ -1,0 +1,32 @@
+# Settings for the board in use: ESP32-S3 N8R2 (8 MB quad flash, 2 MB QUAD PSRAM).
+# (The N16R8 board - 16 MB flash, 8 MB octal PSRAM - would need FLASHSIZE_16MB and
+#  SPIRAM_MODE_OCT instead. Using those on the N8R2 crashed at boot with
+#  "octal_psram: PSRAM chip is not connected, or wrong PSRAM line mode".)
+# Option names were checked in ESP-IDF v5.5.6 Kconfig files (see docs/1_11_board_dry_run.md).
+
+# --- Flash: 8 MB ---
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# --- PSRAM: 2 MB quad ---
+# CAPS_ALLOC: PSRAM is added to the heap, but plain malloc() still uses internal
+# RAM. We ask for PSRAM explicitly with heap_caps_malloc(..., MALLOC_CAP_SPIRAM).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+
+# --- CPU / compiler ---
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# --- Misc ---
+# The model code runs in the main task; give it more stack than the 3584 default.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# One app slot big enough for TFLite Micro + test data (default 1 MB may be tight).
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# ESP-NN optimised kernels: ON by default in the library's Kconfig
+# (ESP_TFLITE_MICRO_USE_ESP_NN, default y). Stated here so it is explicit.
+CONFIG_ESP_TFLITE_MICRO_USE_ESP_NN=y

@@ -1,0 +1,11 @@
+{
+  "window_packets": 128,
+  "subcarriers": 52,
+  "step_1": "subtract, for every subcarrier, its average over the window",
+  "step_2": "divide by scale",
+  "scale": 2.4083545207977295,
+  "input_scale": 0.05648430436849594,
+  "input_zero_point": 9,
+  "output_scale": 0.00390625,
+  "output_zero_point": -128
+}

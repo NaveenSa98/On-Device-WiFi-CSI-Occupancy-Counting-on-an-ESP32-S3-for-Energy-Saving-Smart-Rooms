@@ -37,6 +37,7 @@
 #include "wifi_creds.h"
 
 #define CONFIG_SEND_FREQUENCY      100
+/* #define CONFIG_SEND_FREQUENCY      50 */
 #if CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
 #define CSI_FORCE_LLTF                      0
 #endif

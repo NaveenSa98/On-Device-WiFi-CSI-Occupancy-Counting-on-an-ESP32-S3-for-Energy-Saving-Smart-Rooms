@@ -217,8 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# SmartRoomSense recordings: keep session_log.csv, not the large raw CSVs (guide 8.9)
-SmartRoomSense/data/raw/
-SmartRoomSense/data/pilot/
-SmartRoomSense/data/tests/
-SmartRoomSense/data/bad/
+# SmartRoomSense: ignore all recordings and docs for now
+SmartRoomSense/data/
+SmartRoomSense/docs/
+SmartRoomSense/reports/
