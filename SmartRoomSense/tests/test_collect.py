@@ -74,53 +74,100 @@ class FakeSerial:
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(logger, "DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr(logger, "SESSION_LOG", tmp_path / "data" / "session_log.csv")
     return tmp_path / "data"
 
 
 def run_logger(monkeypatch, fake, *extra):
     monkeypatch.setattr(logger, "open_port", lambda port, baud: fake)
     argv = ["--port", "FAKE", "--kind", "data", "--room", "roomA", "--day", "1", "--session", "2",
-            "--people", "2", "--activity", "walk", "--countdown", "0", *extra]
+            "--people", "2", "--activity", "walk", "--block", "T4", "--subjects", "P1+P2",
+            "--countdown", "0", *extra]
     return logger.main(argv)
 
 
 def test_build_path(data_dir):
-    p = logger.build_path("data", "roomA", 1, 2, 2, "walk", 1)
-    assert p == data_dir / "raw/roomA/roomA_d1_s2/2/roomA_d1_s2_n2_walk_r1.csv"
-    assert logger.build_path("pilot", "roomA", 0, 1, 0, "baseline", 1).parent == data_dir / "pilot"
-    assert logger.build_path("test", "roomA", 0, 1, 0, "testA", 1).parent == data_dir / "tests"
+    p = logger.build_path("data", "roomA", 1, 2, 2, "walk", 1, block="T4")
+    assert p == data_dir / "raw/roomA_d1_s2/roomA_d1_s2_T4.csv"                  # first take: no suffix
+    assert logger.build_path("data", "roomA", 1, 2, 2, "walk", 2, block="T4").name == "roomA_d1_s2_T4_r2.csv"
+    assert logger.build_path("data", "roomA", 1, 2, 2, "walk", 1, partial=True, block="T4").name ==         "roomA_d1_s2_T4_partial.csv"
+    assert logger.build_path("pilot", "roomA", 0, 1, 0, "quiet", 1, block="E1") == data_dir / "pilot/roomA_d0_s1_E1.csv"
+    assert logger.build_path("test", "roomA", 0, 1, 0, "testA", 1) == data_dir / "tests/roomA_d0_s1_n0_testA_r1.csv"
 
 
 def test_logger_full_recording(data_dir, monkeypatch):
     fake = FakeSerial(n_rows=400)
     assert run_logger(monkeypatch, fake, "--duration", "2") == 0
-    out = data_dir / "raw/roomA/roomA_d1_s2/2/roomA_d1_s2_n2_walk_r1.csv"
+    out = data_dir / "raw/roomA_d1_s2/roomA_d1_s2_T4.csv"
     with open(out, newline="") as f:
         rows = list(csv.reader(f))
     assert rows[0] == CSV_COLUMNS
     assert 100 <= len(rows) - 1 <= 260
     assert len(rows[1]) == 26 and rows[1][0][:2] == "20"       # pc_time then 25 fields
     assert rows[1][3] == ROUTER_BSSID
-    with open(data_dir / "session_log.csv", newline="") as f:
+    with open(data_dir / "raw" / "manifest.csv", newline="") as f:
         log = list(csv.DictReader(f))
-    assert len(log) == 1 and log[0]["skipped"] == "1" and log[0]["people"] == "2"
+    assert list(log[0]) == logger.MANIFEST_COLUMNS
+    row = log[0]
+    assert len(log) == 1 and row["skipped"] == "1" and row["count"] == "2" and row["presence"] == "1"
+    assert row["file"] == "roomA_d1_s2/roomA_d1_s2_T4.csv"                     # relative to manifest.csv
+    assert (row["block"], row["subjects"], row["day"], row["partial"]) == ("T4", "P1+P2", "1", "0")
+    assert (row["channel"], row["bandwidth"]) == (str(ROUTER_CHANNEL), "0")    # from the first row
     assert fake.closed
 
 
-def test_logger_never_overwrites(data_dir, monkeypatch):
+def test_logger_rejects_incomplete_labels_before_opening_the_port(data_dir, monkeypatch):
+    def refuse(port, baud):
+        raise AssertionError("port must not be opened")
+    monkeypatch.setattr(logger, "open_port", refuse)
+    base = ["--port", "FAKE", "--kind", "pilot", "--countdown", "0"]
+    bad = [
+        (["--people", "1", "--activity", "still", "--block", "S1", "--subjects", "P1"], "posture"),
+        (["--people", "1", "--activity", "walk", "--subjects", "P1"], "--block"),
+        (["--people", "2", "--activity", "walk", "--block", "T4", "--subjects", "P1"], "--subjects"),
+        (["--people", "0", "--activity", "disturbance", "--block", "E2", "--subjects", "none"], "disturbance"),
+        (["--people", "1", "--activity", "quiet", "--block", "E1", "--subjects", "P1"], "empty room"),
+        (["--people", "0", "--activity", "dancing", "--block", "E1", "--subjects", "none"], "--activity"),
+        (["--people", "1", "--activity", "walk", "--block", "D1", "--subjects", "P1", "--posture", "fly"], "--posture"),
+    ]
+    for args, word in bad:
+        with pytest.raises(SystemExit) as exc:
+            logger.main(base + args)
+        assert word in str(exc.value), (args, str(exc.value))
+
+
+def test_logger_pilot_manifest_with_two_people_labels(data_dir, monkeypatch):
+    monkeypatch.setattr(logger, "open_port", lambda port, baud: FakeSerial(300))
+    assert logger.main(["--port", "FAKE", "--kind", "pilot", "--countdown", "0", "--duration", "1",
+                        "--people", "2", "--activity", "still", "--block", "T1", "--subjects", "P1+P2",
+                        "--posture", "sit+lie", "--position", "near-link+away", "--notes", "door open"]) == 0
+    with open(data_dir / "pilot" / "manifest.csv", newline="") as f:
+        row = next(csv.DictReader(f))
+    assert row["file"] == "roomA_d0_s1_T1.csv"
+    assert (row["posture"], row["position"], row["notes"]) == ("sit+lie", "near-link+away", "door open")
+
+
+def test_link_tests_write_only_the_csv(data_dir, monkeypatch):
+    monkeypatch.setattr(logger, "open_port", lambda port, baud: FakeSerial(300))
+    assert logger.main(["--port", "FAKE", "--kind", "test", "--people", "0", "--activity", "testA",
+                        "--countdown", "0", "--duration", "1"]) == 0
+    assert [p.name for p in (data_dir / "tests").iterdir()] == ["roomA_d0_s1_n0_testA_r1.csv"]
+
+
+def test_logger_never_overwrites_and_retake_gets_r2(data_dir, monkeypatch):
     assert run_logger(monkeypatch, FakeSerial(300), "--duration", "1") == 0
     with pytest.raises(SystemExit) as exc:
         run_logger(monkeypatch, FakeSerial(300), "--duration", "1")
     assert "never overwrite" in str(exc.value)
+    assert run_logger(monkeypatch, FakeSerial(300), "--duration", "1", "--retry", "2") == 0
+    assert (data_dir / "raw/roomA_d1_s2/roomA_d1_s2_T4_r2.csv").exists()
 
 
 def test_logger_partial_after_silence(data_dir, monkeypatch, capsys):
     fake = FakeSerial(n_rows=50)                 # 0.5 s of data, then silence
     assert run_logger(monkeypatch, fake, "--duration", "20") == 1
-    partial = data_dir / "raw/roomA/roomA_d1_s2/2/roomA_d1_s2_n2_walk_r1_partial.csv"
+    partial = data_dir / "raw/roomA_d1_s2/roomA_d1_s2_T4_partial.csv"
     assert partial.exists()
-    assert not partial.with_name("roomA_d1_s2_n2_walk_r1.csv").exists()
+    assert not partial.with_name("roomA_d1_s2_T4.csv").exists()
 
 
 def test_logger_no_rows_saves_nothing(data_dir, monkeypatch):
@@ -272,29 +319,70 @@ def test_checker_counts_spliced_row_as_damaged_instead_of_crashing(tmp_path):
     assert not r["passed"]
 
 
+def test_checker_finds_lost_lines_from_id_gaps(tmp_path):
+    one_lost = [i + (1 if i >= 500 else 0) for i in range(1000)]        # one id missing
+    r = checker.check_file(write_recording(tmp_path / "one.csv", ids=one_lost))
+    assert r["missing_ids"] == 1 and r["passed"], r["reasons"]
+    many_lost = [i + 3 * (i // 100) for i in range(1000)]               # 3 ids lost every 100 rows
+    r = checker.check_file(write_recording(tmp_path / "many.csv", ids=many_lost))
+    assert r["missing_ids"] == 27
+    assert not r["passed"] and any(x.startswith("lost lines") for x in r["reasons"])
+
+
+def test_checker_restart_is_not_counted_as_lost_lines(tmp_path):
+    ids = list(range(500)) + list(range(500))
+    assert checker.check_file(write_recording(tmp_path / "r.csv", ids=ids))["missing_ids"] == 0
+
+
+def test_checker_auto_accepts_other_settings_but_not_a_mix(tmp_path):
+    other = write_recording(tmp_path / "other.csv", bandwidth=1)         # not the frozen router setting
+    assert not checker.check_file(other)["passed"]
+    assert checker.check_file(other, expected={"bandwidth": None})["passed"]
+    folder = tmp_path / "s1"
+    folder.mkdir()
+    write_recording(folder / "a.csv", bandwidth=1)
+    write_recording(folder / "b.csv", bandwidth=1)
+    assert checker.main([str(folder), "--brief", "--auto"]) == 0        # agree with each other
+    write_recording(folder / "c.csv", bandwidth=0)
+    assert checker.main([str(folder), "--brief", "--auto"]) == 1        # one differs
+
+
+def test_checker_folder_reports_inconsistent_settings_and_saves_check_txt_only_on_request(tmp_path, capsys):
+    folder = tmp_path / "roomA_d1_s1"
+    folder.mkdir()
+    write_recording(folder / "a.csv", bandwidth=0)
+    write_recording(folder / "b.csv", bandwidth=1)
+    assert checker.main([str(folder), "--brief", "--auto"]) == 1
+    assert "CONSISTENCY FAIL: setting bandwidth differs" in capsys.readouterr().out
+    assert not (folder / "check.txt").exists()                           # nothing saved unless asked
+    checker.main([str(folder), "--brief", "--auto", "--save"])
+    text = (folder / "check.txt").read_text()
+    assert "=== a.csv ===" in text and "FAIL: setting bandwidth differs" in text
+
+
 # ---- profile ------------------------------------------------------------------------------
 
-from src.collect import profile
+from src.collect import viewer
 
 
 def test_profile_finds_the_predicted_empty_positions(tmp_path):
-    path = write_recording(tmp_path / "p.csv", n=1500, zero_positions=profile.PREDICTED_EMPTY)
-    means, n_rows = profile.mean_profile(path)
+    path = write_recording(tmp_path / "p.csv", n=1500, zero_positions=viewer.PREDICTED_EMPTY)
+    means, n_rows = viewer.mean_profile(path)
     assert n_rows == pytest.approx(1500 - 500, abs=2)               # first 5 s skipped
-    assert profile.lowest_positions(means) == profile.PREDICTED_EMPTY
+    assert viewer.lowest_positions(means) == viewer.PREDICTED_EMPTY
     assert means[1] == pytest.approx(28, abs=2)                      # hypot(20, 20)
 
 
 def test_profile_ignores_invalid_first_values_when_first_word_is_1(tmp_path):
     path = write_recording(tmp_path / "fw.csv", n=1500, first_word_rows=set(range(600, 1500)))
-    means, _ = profile.mean_profile(path)
+    means, _ = viewer.mean_profile(path)
     assert means[0] < 40 and means[1] < 40        # 999s would give ~1400 if they were used
 
 
 def test_profile_main_writes_plot_and_reports_mismatch(tmp_path, capsys):
     path = write_recording(tmp_path / "q.csv", n=1500, zero_positions=[3])
     out = tmp_path / "fig" / "q.png"
-    assert profile.main([str(path), "--out", str(out)]) == 0
+    assert viewer.main(["map", str(path), "--out", str(out)]) == 0
     text = capsys.readouterr().out
     assert out.exists() and "Does NOT match" in text and "3" in text
 
@@ -302,5 +390,5 @@ def test_profile_main_writes_plot_and_reports_mismatch(tmp_path, capsys):
 def test_profile_too_short_file(tmp_path):
     path = write_recording(tmp_path / "s.csv", n=300)               # 3 s, all skipped
     with pytest.raises(SystemExit) as exc:
-        profile.main([str(path)])
+        viewer.main(["map", str(path)])
     assert "shorter" in str(exc.value)

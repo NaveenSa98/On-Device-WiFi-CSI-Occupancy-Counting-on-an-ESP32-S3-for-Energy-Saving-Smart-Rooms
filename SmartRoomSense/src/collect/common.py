@@ -1,4 +1,5 @@
 """Shared constants and helpers for the CSI collection programs (guide v2, step 3)."""
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -21,13 +22,13 @@ N_FIELDS = len(FIRMWARE_COLUMNS)
 NUMERIC_COLUMNS = [c for c in FIRMWARE_COLUMNS if c not in ("type", "mac", "data")]
 LEN_INDEX = FIRMWARE_COLUMNS.index("len")
 
-# Frozen router values (docs/config_note.md). Changing these means a new dataset version.
-ROUTER_BSSID = "d8:d8:66:4f:2d:c7"
-ROUTER_CHANNEL = 11
+# Frozen router values. Changing any of these (router, channel, width) means a new dataset version.
+ROUTER_BSSID = "6c:14:6e:2c:71:4c"
+ROUTER_CHANNEL = 2
 EXPECTED_LEN = 128
 N_POSITIONS = EXPECTED_LEN // 2  # 64 subcarrier positions (imag, real pairs)
 
-# Provisional kept positions (guide step 3, program 3): confirm with profile.py on the pilot.
+# Provisional kept positions (guide step 3, program 3): confirm with `map` on the pilot.
 KEPT_POSITIONS = list(range(1, 27)) + list(range(38, 64))
 
 # Checker PASS rules, first version (guide step 3, program 2). Revise after the pilot.
@@ -35,12 +36,19 @@ MIN_ROWS_PER_SECOND = 80
 MAX_GAP_MS = 500
 GAP_WARN_MS = 100
 MAX_RESTARTS = 0
+MAX_MISSING_FRACTION = 0.01  # lost serial lines (gaps in the firmware id) allowed, as a fraction of all lines
 SKIP_SECONDS = 5
 
 TIMESTAMP_WRAP = 2 ** 32
 
 ROOMS = ("roomA", "roomB")
 KINDS = ("pilot", "test", "data")
+
+# Label lists for pilot and data recordings (plan 2B manifest). "test" recordings (link tests) are free text.
+ACTIVITIES = ("quiet", "disturbance", "still", "walk", "desk", "mixed")  # E1 / E2-E3 / S / D, T still / T dynamic
+POSTURES = ("none", "sit", "stand", "lie")
+POSITIONS = ("none", "near-link", "away", "edge")
+DISTURBANCES = ("none", "fan", "door", "chair", "other")
 
 
 def parse_csi_line(line: str):
@@ -131,3 +139,43 @@ def load_recording(path):
     amp = amplitudes(values[good])
     amp[df["first_word"].to_numpy() == 1, :2] = np.nan
     return df, amp, int(bad.sum())
+
+
+# ---- activity indicator (used by the live view and the block plots) ------------------------
+# For each kept subcarrier take the standard deviation of its amplitude over a short window, then
+# average over the 52 subcarriers. A still, empty room is low and flat; a person moving gives spikes.
+
+WINDOW_S = 2.0   # length of the window the std is taken over
+STEP_S = 0.5     # one activity value every 0.5 s
+MIN_ROWS = 5     # fewer rows than this in a window -> no value (NaN)
+
+
+def activity_series(seconds, amp, window_s=WINDOW_S, step_s=STEP_S):
+    """Rolling activity indicator.
+
+    seconds: (rows,) time of each row in seconds, increasing.
+    amp: (rows, 64) amplitude per position (see amplitudes()).
+    Returns (t, activity): the end time of each window and its value (NaN when too few rows).
+    """
+    seconds = np.asarray(seconds, dtype=float)
+    if len(seconds) < 2 or seconds[-1] - seconds[0] < window_s:
+        return np.array([]), np.array([])
+    kept = amp[:, KEPT_POSITIONS]
+    ends = np.arange(seconds[0] + window_s, seconds[-1] + 1e-9, step_s)
+    lo = np.searchsorted(seconds, ends - window_s, side="left")
+    hi = np.searchsorted(seconds, ends, side="right")
+    out = np.full(len(ends), np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # a position that is NaN in the whole window
+        for k, (a, b) in enumerate(zip(lo, hi)):
+            if b - a >= MIN_ROWS:
+                out[k] = np.nanmean(np.nanstd(kept[a:b], axis=0))
+    return ends, out
+
+
+def threshold_from_baseline(activity):
+    """Empty-room threshold = mean + 3 std of the activity values (plan step 2C.5)."""
+    values = activity[~np.isnan(activity)]
+    if len(values) < 3:
+        return None
+    return float(values.mean() + 3 * values.std())
